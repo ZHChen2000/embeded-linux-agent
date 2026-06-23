@@ -352,7 +352,7 @@ def verify_workspace() -> None:
                     missing.append(f"workspace/peripherals/{p.id}/{f}")
 
     if missing:
-        console.print(f"[red]Missing workspace files:[/red]")
+        console.print("[red]Missing workspace files:[/red]")
         for m in missing:
             console.print(f"  - {m}")
         console.print("Run elda ingest, review files, then retry.")
