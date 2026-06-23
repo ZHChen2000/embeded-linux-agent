@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
+
+# Must be set before app.config / app.db.session are imported (engine at import time).
+os.environ.setdefault(
+    "ELDA_DATABASE_URL",
+    "postgresql+asyncpg://elda:elda@127.0.0.1:5432/elda_test",
+)
 
 import pytest
 from fastapi.testclient import TestClient
