@@ -103,3 +103,22 @@ def infer_module_paths_from_patches(patches: list[dict[str, str]]) -> list[str]:
             elif path.startswith("arch/"):
                 continue
     return list(dict.fromkeys(module_paths))
+
+
+def validate_dts_irq_conflict(dts: str, irqs: list[int]) -> None:
+    if not dts or not dts.strip():
+        return
+    pattern = re.compile(r"interrupts(?:-extended)?\s*=\s*<([^>]+)>", re.IGNORECASE)
+    found: set[int] = set()
+    for m in pattern.finditer(dts):
+        content = m.group(1)
+        nums = re.findall(r"0x[0-9a-fA-F]+|\d+", content)
+        for n in nums:
+            try:
+                val = int(n, 0)
+            except Exception:
+                continue
+            found.add(val)
+    conflicts = found.intersection(set(irqs))
+    if conflicts:
+        raise jsonschema.ValidationError(f"IRQ conflict detected: {sorted(list(conflicts))}")
