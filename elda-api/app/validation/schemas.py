@@ -108,7 +108,7 @@ def infer_module_paths_from_patches(patches: list[dict[str, str]]) -> list[str]:
 def validate_dts_irq_conflict(dts: str, irqs: list[int]) -> None:
     if not dts or not dts.strip():
         return
-    pattern = re.compile(r"interrupts\s*=\s*<([^>]+)>", re.IGNORECASE)
+    pattern = re.compile(r"interrupts(?:-extended)?\s*=\s*<([^>]+)>", re.IGNORECASE)
     found: set[int] = set()
     for m in pattern.finditer(dts):
         content = m.group(1)
