@@ -17,7 +17,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e "./elda[dev]" -e "./elda-api[dev]"
+          pip install -e "./elda[dev]"
+          pip install -e "./elda-api[dev]"
 
       - name: Ruff
         run: ruff check elda/elda elda-api/app
