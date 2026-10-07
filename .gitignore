@@ -9,6 +9,8 @@ build/
 !elda-api/app/build/**
 !elda/elda/build/
 !elda/elda/build/**
+elda-api/app/build/__pycache__/
+elda/elda/build/__pycache__/
 .venv/
 venv/
 .env
