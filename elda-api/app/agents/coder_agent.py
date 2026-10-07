@@ -6,7 +6,10 @@ from typing import Any
 
 from app.agents.base import BaseAgent
 from app.rag.service import rag_service
-from app.validation.schemas import infer_module_paths_from_patches, validate_patch_envelope
+from app.validation.schemas import (
+    infer_module_paths_from_patches,
+    validate_patch_envelope,
+)
 
 
 class CoderAgent(BaseAgent):

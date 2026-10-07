@@ -111,24 +111,23 @@ class TaskStore:
             return _call_to_record(call)
 
     async def poll_tool_call(self, executor_id: str) -> ToolCallRecord | None:
-        async with SessionLocal() as session:
-            async with session.begin():
-                stmt = (
-                    select(ToolCall)
-                    .where(ToolCall.status == "pending")
-                    .order_by(ToolCall.created_at)
-                    .limit(1)
-                    .with_for_update(skip_locked=True)
-                )
-                result = await session.execute(stmt)
-                call = result.scalar_one_or_none()
-                if not call:
-                    return None
-                call.status = "dispatched"
-                call.executor_id = executor_id
-                call.updated_at = datetime.now(timezone.utc)
-                await session.flush()
-                return _call_to_record(call)
+        async with SessionLocal() as session, session.begin():
+            stmt = (
+                select(ToolCall)
+                .where(ToolCall.status == "pending")
+                .order_by(ToolCall.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            result = await session.execute(stmt)
+            call = result.scalar_one_or_none()
+            if not call:
+                return None
+            call.status = "dispatched"
+            call.executor_id = executor_id
+            call.updated_at = datetime.now(timezone.utc)
+            await session.flush()
+            return _call_to_record(call)
 
     async def get_tool_call(self, call_id: str) -> ToolCallRecord | None:
         async with SessionLocal() as session:

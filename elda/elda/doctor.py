@@ -10,8 +10,8 @@ from pathlib import Path
 import httpx
 
 from elda.config import load_project_config
-from elda.secrets_loader import load_api_secrets
 from elda.ingest.pdf_extract import available_pdf_backends
+from elda.secrets_loader import load_api_secrets
 from elda.validation import validate_project_config
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -114,7 +113,7 @@ def _require_verified(root: Path) -> None:
 @app.command()
 def init(
     name: str = typer.Argument(..., help="Project name"),
-    directory: Optional[Path] = typer.Option(None, "--dir", "-d", help="Parent directory"),
+    directory: Path | None = typer.Option(None, "--dir", "-d", help="Parent directory"),
 ) -> None:
     """Create a new ELDA project."""
     parent = directory or Path.cwd()
@@ -163,7 +162,7 @@ def init(
 
 @app.command()
 def ingest(
-    soc_datasheet: Optional[Path] = typer.Option(None, "--soc-datasheet"),
+    soc_datasheet: Path | None = typer.Option(None, "--soc-datasheet"),
 ) -> None:
     """Parse datasheets via PDF extract (PyMuPDF / pdftotext / optional MinerU)."""
     cfg, root = load_project_config()
@@ -199,7 +198,7 @@ def board_add() -> None:
 
 @app.command()
 def plan(
-    target: Optional[str] = typer.Option(None, "--target"),
+    target: str | None = typer.Option(None, "--target"),
     framework: str = typer.Option("auto", "--framework"),
 ) -> None:
     """Generate driver plan via PlannerAgent."""
@@ -269,8 +268,8 @@ def deploy() -> None:
 
 @app.command()
 def test(
-    log_file: Optional[Path] = typer.Option(None, "--log", help="dmesg or serial log file"),
-    app_output: Optional[Path] = typer.Option(None, "--app-log", help="User-space test app output"),
+    log_file: Path | None = typer.Option(None, "--log", help="dmesg or serial log file"),
+    app_output: Path | None = typer.Option(None, "--app-log", help="User-space test app output"),
 ) -> None:
     """Analyze board test logs."""
     cfg, root = load_project_config()
@@ -292,7 +291,7 @@ def report() -> None:
 
 @app.command()
 def chat(
-    message: Optional[str] = typer.Argument(None, help="Message; omit for interactive mode"),
+    message: str | None = typer.Argument(None, help="Message; omit for interactive mode"),
 ) -> None:
     """Read-only Q&A about hardware, drivers, and project state."""
     cfg, root = load_project_config()

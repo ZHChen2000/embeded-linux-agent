@@ -121,4 +121,4 @@ def validate_dts_irq_conflict(dts: str, irqs: list[int]) -> None:
             found.add(val)
     conflicts = found.intersection(set(irqs))
     if conflicts:
-        raise jsonschema.ValidationError(f"IRQ conflict detected: {sorted(list(conflicts))}")
+        raise jsonschema.ValidationError(f"IRQ conflict detected: {sorted(conflicts)}")

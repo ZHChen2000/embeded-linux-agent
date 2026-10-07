@@ -17,7 +17,11 @@ from app.db.session import init_db
 from app.logging_setup import setup_logging
 from app.orchestrator.pipeline import orchestrator
 from app.secrets_loader import merge_model_keys
-from app.storage.redis_queue import enqueue_background, get_task_logs, set_executor_heartbeat
+from app.storage.redis_queue import (
+    enqueue_background,
+    get_task_logs,
+    set_executor_heartbeat,
+)
 from app.store import task_store
 from app.worker import run_task_worker
 

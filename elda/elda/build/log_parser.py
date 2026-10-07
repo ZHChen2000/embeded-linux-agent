@@ -4,14 +4,14 @@ import re
 from typing import Any
 
 ERROR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("missing_header", re.compile(r"fatal error:\s*([^:]+):\s*No such file", re.I)),
-    ("dts_syntax", re.compile(r"syntax error", re.I)),
-    ("dtc", re.compile(r"FATAL ERROR|Error.*dts|dtc", re.I)),
-    ("undefined_symbol", re.compile(r"undefined reference to", re.I)),
-    ("struct_field", re.compile(r"has no member named", re.I)),
-    ("signature_mismatch", re.compile(r"conflicting types for", re.I)),
-    ("api_version", re.compile(r"implicit declaration of function", re.I)),
-    ("makefile_path", re.compile(r"No rule to make target", re.I)),
+    ("missing_header", re.compile(r"fatal error:\s*([^:]+):\s*No such file", re.IGNORECASE)),
+    ("dts_syntax", re.compile(r"syntax error", re.IGNORECASE)),
+    ("dtc", re.compile(r"FATAL ERROR|Error.*dts|dtc", re.IGNORECASE)),
+    ("undefined_symbol", re.compile(r"undefined reference to", re.IGNORECASE)),
+    ("struct_field", re.compile(r"has no member named", re.IGNORECASE)),
+    ("signature_mismatch", re.compile(r"conflicting types for", re.IGNORECASE)),
+    ("api_version", re.compile(r"implicit declaration of function", re.IGNORECASE)),
+    ("makefile_path", re.compile(r"No rule to make target", re.IGNORECASE)),
 ]
 
 

@@ -68,7 +68,7 @@ def _check_peripheral_dts(report: DtsValidationReport, p: PeripheralConfig, text
     block = _find_node_block(text, p.name, slug)
     scope = block if block else text
     if p.board.gpios and p.board.gpios.irq:
-        if not re.search(r"interrupts\s*=", scope, re.I):
+        if not re.search(r"interrupts\s*=", scope, re.IGNORECASE):
             report.issues.append(
                 DtsIssue(
                     severity="error",
@@ -76,7 +76,7 @@ def _check_peripheral_dts(report: DtsValidationReport, p: PeripheralConfig, text
                     message="elda.yaml defines IRQ GPIO but DTS node lacks interrupts property.",
                 )
             )
-        if not re.search(r"interrupt-parent\s*=", scope, re.I):
+        if not re.search(r"interrupt-parent\s*=", scope, re.IGNORECASE):
             report.issues.append(
                 DtsIssue(
                     severity="error",
@@ -84,8 +84,8 @@ def _check_peripheral_dts(report: DtsValidationReport, p: PeripheralConfig, text
                     message="elda.yaml defines IRQ GPIO but DTS node lacks interrupt-parent.",
                 )
             )
-        if not re.search(r"pinctrl-\d+\s*=", scope, re.I) and not re.search(
-            r"pinctrl-names\s*=", scope, re.I
+        if not re.search(r"pinctrl-\d+\s*=", scope, re.IGNORECASE) and not re.search(
+            r"pinctrl-names\s*=", scope, re.IGNORECASE
         ):
             report.issues.append(
                 DtsIssue(
@@ -96,8 +96,8 @@ def _check_peripheral_dts(report: DtsValidationReport, p: PeripheralConfig, text
             )
     if p.bus == "i2c" and p.board.i2c:
         addr = p.board.i2c.address.lower().replace("0x", "")
-        if block and not re.search(rf"reg\s*=\s*<[^>]*0x{addr}[^>]*>", block, re.I):
-            if not re.search(rf"reg\s*=\s*<[^>]*{addr}[^>]*>", block, re.I):
+        if block and not re.search(rf"reg\s*=\s*<[^>]*0x{addr}[^>]*>", block, re.IGNORECASE):
+            if not re.search(rf"reg\s*=\s*<[^>]*{addr}[^>]*>", block, re.IGNORECASE):
                 report.issues.append(
                     DtsIssue(
                         severity="error",
@@ -106,7 +106,7 @@ def _check_peripheral_dts(report: DtsValidationReport, p: PeripheralConfig, text
                     )
                 )
     if p.bus in ("spi", "qspi") and p.board.spi:
-        if block and not re.search(r"cs-gpios|reg\s*=", block, re.I):
+        if block and not re.search(r"cs-gpios|reg\s*=", block, re.IGNORECASE):
             report.issues.append(
                 DtsIssue(
                     severity="warning",
@@ -123,11 +123,11 @@ def _find_node_block(text: str, name: str, slug: str) -> str | None:
         rf"compatible\s*=\s*\"[^\"]*{re.escape(slug)}",
     ]
     for pat in patterns:
-        m = re.search(pat, text, re.I)
+        m = re.search(pat, text, re.IGNORECASE)
         if not m:
             continue
         start = text.rfind("\n", 0, m.start())
-        start = 0 if start < 0 else start
+        start = max(start, 0)
         depth = 0
         i = start
         while i < len(text):

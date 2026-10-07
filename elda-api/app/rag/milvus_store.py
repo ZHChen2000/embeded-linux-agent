@@ -42,14 +42,14 @@ class MilvusStore:
     def connect(self) -> None:
         if self._connected:
             return
-        _, _, _, _, connections, utility = _pymilvus()
+        _, _, _, _, connections, _utility = _pymilvus()
         connections.connect(
             alias="default",
             host=settings.milvus_host,
             port=str(settings.milvus_port),
         )
         self._connected = True
-        for _key, name in COLLECTIONS.items():
+        for name in COLLECTIONS.values():
             self._ensure_collection(name)
 
     def _ensure_collection(self, name: str) -> Any:
