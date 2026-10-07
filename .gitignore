@@ -7,6 +7,8 @@ dist/
 build/
 !elda-api/app/build/
 !elda-api/app/build/**
+!elda/elda/build/
+!elda/elda/build/**
 .venv/
 venv/
 .env
