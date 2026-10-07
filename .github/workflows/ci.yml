@@ -19,6 +19,7 @@ jobs:
         run: |
           pip install -e "./elda[dev]"
           pip install -e "./elda-api[dev]"
+          pip install "ruff==0.4.10"
 
       - name: Ruff
         run: ruff check elda/elda elda-api/app
