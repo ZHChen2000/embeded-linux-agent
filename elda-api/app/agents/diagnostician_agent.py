@@ -22,7 +22,10 @@ class DiagnosticianAgent(BaseAgent):
                 "role": "user",
                 "content": (
                     "Analyze embedded Linux bring-up test results. Output JSON:\n"
-                    "{probe_ok, chip_id_ok, chip_id_value, iio_nodes_ok, errors[], suggestions[]}\n"
+                    "{probe_ok, chip_id_ok, chip_id_value, iio_nodes_ok, irq_ok, data_ready_ok, "
+                    "errors[], suggestions[]}\n"
+                    "Set irq_ok false if interrupt registration failed or no IRQ events in logs. "
+                    "Set data_ready_ok false if sensor data never updates.\n"
                     f"Expected WHO_AM_I: {who_am_i}\n\n"
                     f"--- DMESG ---\n{dmesg[-15000:]}\n\n"
                     f"--- APP OUTPUT ---\n{app_output[-5000:]}"

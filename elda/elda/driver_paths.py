@@ -16,6 +16,9 @@ FRAMEWORK_MODULE_PATHS: dict[str, str] = {
     "rtc": "drivers/rtc",
     "led": "drivers/leds",
     "misc": "drivers/misc",
+    "qspi": "drivers/misc",
+    "platform": "drivers/misc",
+    "char": "drivers/char",
     "auto": "drivers",
 }
 

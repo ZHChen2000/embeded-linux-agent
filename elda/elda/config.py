@@ -98,7 +98,9 @@ class DeployConfig(BaseModel):
 
 class BuildConfig(BaseModel):
     max_fix_rounds: int = 10
+    max_test_fix_rounds: int = 2
     auto_apply_patches: bool = True
+    auto_fix_test: bool = True
     targets: list[str] = Field(default_factory=lambda: ["module", "dtc", "zimage", "dtb"])
 
 

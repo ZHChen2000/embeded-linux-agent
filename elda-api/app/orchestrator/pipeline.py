@@ -155,7 +155,13 @@ class PipelineOrchestrator:
         payload["hardware_context"] = await self._load_hardware_context(payload.get("project_root", "."))
         plans = []
         for p in self._enabled_peripherals(payload):
-            pp = {**payload, "target": p.get("name", "device"), "current_peripheral": p.get("name")}
+            pp = {
+                **payload,
+                "target": p.get("name", "device"),
+                "current_peripheral": p.get("name"),
+                "peripheral_spec": p,
+                "framework": p.get("framework", p.get("driver_framework", "auto")),
+            }
             plan = await self.planner.plan(pp)
             plans.append({"peripheral_id": p.get("id"), "plan": plan})
         root = Path(payload.get("project_root", "."))
@@ -182,7 +188,13 @@ class PipelineOrchestrator:
         root = Path(payload.get("project_root", "."))
         all_patches: list[dict[str, str]] = []
         for p in self._enabled_peripherals(payload):
-            pp = {**payload, "target": p["name"], "current_peripheral": p["name"]}
+            pp = {
+                **payload,
+                "target": p["name"],
+                "current_peripheral": p["name"],
+                "peripheral_spec": p,
+                "framework": p.get("framework", p.get("driver_framework", "auto")),
+            }
             for phase in phases:
                 patches = await self.coder.generate_phase(pp, phase)
                 for patch in patches:
@@ -203,6 +215,15 @@ class PipelineOrchestrator:
         if not manifest["module_paths"]:
             manifest["module_paths"] = payload.get("driver_module_paths", ["drivers/iio"])
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        if "dts" in phases and payload.get("board_dts"):
+            dts_res = await self.executor.tool_call(
+                task.id,
+                "dts.validate",
+                {"dts_path": payload["board_dts"]},
+                wait=True,
+            )
+            if dts_res.get("has_errors"):
+                raise RuntimeError("DTS validation failed after generate")
         await task_store.set_status(
             task.id,
             "done",
@@ -213,30 +234,29 @@ class PipelineOrchestrator:
     async def _run_build(self, task: TaskRecord) -> None:
         payload = dict(task.payload)
         max_rounds = int(payload.get("max_fix_rounds", 10))
+        fix_enabled = payload.get("fix", True)
+        targets = payload.get("build_targets") or ["module", "dtc", "zimage", "dtb"]
         root = Path(payload.get("project_root", "."))
         module_paths = _resolve_module_paths(root, payload)
 
         for round_i in range(max_rounds + 1):
             logs: list[str] = []
             all_ok = True
-            for mp in module_paths:
-                mod = await self.executor.tool_call(
-                    task.id, "build.make_module", {"module_path": mp}, wait=True
-                )
-                logs.append(mod.get("log", ""))
-                if not mod.get("success", False):
-                    all_ok = False
-            if payload.get("board_dts"):
+            if "module" in targets:
+                for mp in module_paths:
+                    mod = await self.executor.tool_call(
+                        task.id, "build.make_module", {"module_path": mp}, wait=True
+                    )
+                    logs.append(mod.get("log", ""))
+                    if not mod.get("success", False):
+                        all_ok = False
+            if "dtc" in targets and payload.get("board_dts"):
                 dtc = await self.executor.tool_call(
                     task.id, "build.dtc", {"dts_path": payload["board_dts"]}, wait=True
                 )
                 logs.append(dtc.get("log", ""))
                 if not dtc.get("success", False):
                     all_ok = False
-            zimg = await self.executor.tool_call(task.id, "build.make_zimage", {}, wait=True)
-            logs.append(zimg.get("log", ""))
-            if not zimg.get("success", False):
-                all_ok = False
 
             full_log = "\n".join(logs)
             log_file = root / "output" / "logs" / f"build_round_{round_i}.log"
@@ -247,10 +267,28 @@ class PipelineOrchestrator:
             parsed = await self.executor.tool_call(
                 task.id, "build.parse_log", {"log": full_log}, wait=True
             )
-            if all_ok and parsed.get("error_count", 0) == 0:
-                await task_store.set_status(task.id, "done", message="Build succeeded")
-                return
-            if round_i >= max_rounds:
+            compile_ok = all_ok and parsed.get("error_count", 0) == 0
+            if compile_ok:
+                if "zimage" in targets:
+                    zimg = await self.executor.tool_call(
+                        task.id, "build.make_zimage", {}, wait=True
+                    )
+                    zlog = zimg.get("log", "")
+                    log_file.write_text(full_log + "\n" + zlog, encoding="utf-8")
+                    upload_file(f"{task.project_id}/logs/build_round_{round_i}.log", log_file)
+                    zparsed = await self.executor.tool_call(
+                        task.id, "build.parse_log", {"log": zlog}, wait=True
+                    )
+                    if not zimg.get("success", False) or zparsed.get("error_count", 0):
+                        compile_ok = False
+                        full_log = full_log + "\n" + zlog
+                    else:
+                        await task_store.set_status(task.id, "done", message="Build succeeded")
+                        return
+                else:
+                    await task_store.set_status(task.id, "done", message="Build succeeded")
+                    return
+            if not fix_enabled or round_i >= max_rounds:
                 break
             patch = await self.fixer.fix(payload, full_log, round_i + 1)
             await self.executor.tool_call(
@@ -265,25 +303,84 @@ class PipelineOrchestrator:
         await task_store.set_status(task.id, "failed", message="Build failed after fix rounds")
 
     async def _run_deploy(self, task: TaskRecord) -> None:
+        payload = dict(task.payload)
+        root = Path(payload.get("project_root", "."))
         await self.executor.tool_call(task.id, "deploy.tftp_copy", {}, wait=True)
+        module_paths = _resolve_module_paths(root, payload)
+        nfs_res = await self.executor.tool_call(
+            task.id,
+            "deploy.nfs_modules",
+            {"module_paths": module_paths},
+            wait=True,
+        )
         checklist = await self.executor.tool_call(task.id, "deploy.manual_checklist", {}, wait=True)
         await task_store.set_status(
-            task.id, "done", message="Deployed + manual checklist", result=checklist
+            task.id,
+            "done",
+            message="Deployed + manual checklist",
+            result={**checklist, "nfs_copied": nfs_res.get("copied", [])},
         )
 
     async def _run_test(self, task: TaskRecord) -> None:
         payload = dict(task.payload)
+        root = Path(payload.get("project_root", "."))
         dmesg = payload.get("log_content", "")
         app_out = payload.get("app_output", "")
-        reg_map = _load_register_map(Path(payload.get("project_root", ".")))
-        result = await self.diagnostician.analyze(payload, dmesg, app_out, reg_map)
-        ok = result.get("probe_ok") and result.get("chip_id_ok")
-        root = Path(payload.get("project_root", "."))
-        out = root / "reports" / "test_result.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(result, indent=2), encoding="utf-8")
-        status = "done" if ok else "failed"
-        await task_store.set_status(task.id, status, message="Test analyzed", result=result)
+        if not dmesg and payload.get("capture_serial", True):
+            cap = await self.executor.tool_call(task.id, "serial.capture", {}, wait=True)
+            extracted = await self.executor.tool_call(
+                task.id,
+                "serial.extract_log",
+                {"text": cap.get("log", "")},
+                wait=True,
+            )
+            dmesg = extracted.get("dmesg") or cap.get("log", "")
+            if not app_out:
+                app_out = extracted.get("app_output", "")
+            serial_path = root / "output" / "logs" / "serial_capture.log"
+            serial_path.parent.mkdir(parents=True, exist_ok=True)
+            serial_path.write_text(cap.get("log", ""), encoding="utf-8")
+        reg_map = _load_register_map(root)
+        max_test_rounds = int(payload.get("max_test_fix_rounds", 2))
+        auto_fix = payload.get("auto_fix_test", True)
+        result: dict[str, Any] = {}
+        for round_i in range(max_test_rounds + 1):
+            result = await self.diagnostician.analyze(payload, dmesg, app_out, reg_map)
+            ok = (
+                result.get("probe_ok")
+                and result.get("chip_id_ok")
+                and result.get("irq_ok", True)
+                and result.get("data_ready_ok", True)
+            )
+            out = root / "reports" / "test_result.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            if ok:
+                await task_store.set_status(task.id, "done", message="Test passed", result=result)
+                return
+            if not auto_fix or round_i >= max_test_rounds:
+                break
+            patch = await self.fixer.fix_test(payload, result, round_i + 1)
+            await self.executor.tool_call(
+                task.id,
+                "git.apply_patch",
+                {
+                    "id": patch["id"],
+                    "unified_diff": patch["unified_diff"],
+                    "rationale": patch.get("rationale", ""),
+                },
+                wait=True,
+            )
+            module_paths = _resolve_module_paths(root, payload)
+            for mp in module_paths:
+                await self.executor.tool_call(
+                    task.id, "build.make_module", {"module_path": mp}, wait=True
+                )
+            if payload.get("board_dts"):
+                await self.executor.tool_call(
+                    task.id, "build.dtc", {"dts_path": payload["board_dts"]}, wait=True
+                )
+        await task_store.set_status(task.id, "failed", message="Test failed", result=result)
 
     async def _run_report(self, task: TaskRecord) -> None:
         payload = dict(task.payload)

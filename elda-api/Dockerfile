@@ -15,6 +15,11 @@ ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN pip install --progress-bar off -i "${PIP_INDEX_URL}" \
     --upgrade pip "setuptools>=68" wheel
 
+COPY elda/pyproject.toml /tmp/elda/pyproject.toml
+COPY elda/elda /tmp/elda/elda
+RUN pip install --progress-bar off --prefer-binary --no-build-isolation \
+    -i "${PIP_INDEX_URL}" /tmp/elda
+
 COPY elda-api/pyproject.toml ./
 COPY elda-api/app ./app
 COPY elda-api/alembic.ini ./

@@ -319,6 +319,7 @@ def deploy_manual_checklist(cfg: EldaConfig, root: Path, _args: dict[str, Any]) 
 @registry.register("board.conflict_check")
 def board_conflict_check(cfg: EldaConfig, root: Path, _args: dict[str, Any]) -> dict[str, Any]:
     from elda.executor.board_conflicts import check_board_conflicts
+    from elda.executor.dts_validate import validate_board_dts
 
     report = check_board_conflicts(cfg)
     report_path = root / "reports" / "board_conflict_log.md"
@@ -326,7 +327,100 @@ def board_conflict_check(cfg: EldaConfig, root: Path, _args: dict[str, Any]) -> 
     report_path.write_text(report.to_markdown(), encoding="utf-8")
     data = report.model_dump()
     data["has_hard_errors"] = report.has_hard_errors
+    if cfg.board.dts:
+        dts_path = Path(cfg.board.dts)
+        if not dts_path.is_absolute():
+            dts_path = (root / dts_path).resolve()
+            if not dts_path.is_file():
+                dts_path = cfg.kernel_source_path / cfg.board.dts
+        dts_report = validate_board_dts(cfg, dts_path)
+        dts_path_out = root / "reports" / "dts_validation.md"
+        dts_path_out.write_text(dts_report.to_markdown(), encoding="utf-8")
+        data["dts_validation"] = dts_report.model_dump()
+        if dts_report.has_errors:
+            data["has_hard_errors"] = True
     return data
+
+
+@registry.register("dts.validate")
+def dts_validate_tool(cfg: EldaConfig, root: Path, args: dict[str, Any]) -> dict[str, Any]:
+    from elda.executor.dts_validate import validate_board_dts
+
+    rel = args.get("dts_path") or cfg.board.dts
+    if not rel:
+        raise ValueError("board.dts not configured")
+    dts_path = Path(rel)
+    if not dts_path.is_absolute():
+        dts_path = (root / dts_path).resolve()
+        if not dts_path.is_file():
+            dts_path = cfg.kernel_source_path / rel
+    report = validate_board_dts(cfg, dts_path)
+    out = root / "reports" / "dts_validation.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.to_markdown(), encoding="utf-8")
+    data = report.model_dump()
+    data["has_errors"] = report.has_errors
+    return data
+
+
+@registry.register("serial.capture")
+def serial_capture(cfg: EldaConfig, _root: Path, args: dict[str, Any]) -> dict[str, Any]:
+    port = args.get("port") or cfg.deploy.serial.port
+    baud = int(args.get("baudrate") or cfg.deploy.serial.baudrate)
+    seconds = int(args.get("seconds", 10))
+    script = (
+        f"stty -F {port} {baud} raw -echo cs8 -cstopb -parenb 2>/dev/null; "
+        f"timeout {seconds} cat {port} 2>/dev/null || true"
+    )
+    result = _run_result(["bash", "-lc", script])
+    return {
+        "log": result.stdout,
+        "success": bool(result.stdout.strip()),
+        "returncode": result.returncode,
+    }
+
+
+@registry.register("serial.extract_log")
+def serial_extract_log(_cfg: EldaConfig, _root: Path, args: dict[str, Any]) -> dict[str, Any]:
+    from elda.executor.serial_log import split_serial_capture
+
+    text = args.get("text", "")
+    if not text and args.get("path"):
+        text = Path(args["path"]).read_text(encoding="utf-8", errors="replace")
+    parts = split_serial_capture(text)
+    return parts
+
+
+@registry.register("deploy.nfs_modules")
+def deploy_nfs_modules(cfg: EldaConfig, root: Path, args: dict[str, Any]) -> dict[str, Any]:
+    if not cfg.deploy.nfs:
+        return {"copied": []}
+    kernel = cfg.kernel_source_path
+    nfs_root = Path(cfg.deploy.nfs.rootfs)
+    module_paths = args.get("module_paths") or []
+    copied: list[str] = []
+    seen: set[str] = set()
+    for mp in module_paths:
+        base = kernel / mp
+        if not base.is_dir():
+            continue
+        for ko in base.rglob("*.ko"):
+            if ko.name in seen:
+                continue
+            seen.add(ko.name)
+            dest = nfs_root / cfg.deploy.nfs.ko_path / ko.name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ko, dest)
+            copied.append(str(dest))
+    tests_src = root / "output" / "tests"
+    if tests_src.is_dir():
+        for binf in tests_src.rglob("*"):
+            if binf.is_file() and binf.stat().st_mode & 0o111:
+                dest = nfs_root / cfg.deploy.nfs.app_path / binf.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(binf, dest)
+                copied.append(str(dest))
+    return {"copied": copied}
 
 
 def _safe_path(root: Path, rel: str) -> Path:

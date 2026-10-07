@@ -71,6 +71,9 @@ def _task_payload(cfg: EldaConfig, root: Path, extra: dict | None = None) -> dic
         "deepseek_base_url": secrets.deepseek.base_url,
         "board_dts": cfg.board.dts,
         "max_fix_rounds": cfg.build.max_fix_rounds,
+        "max_test_fix_rounds": cfg.build.max_test_fix_rounds,
+        "auto_fix_test": cfg.build.auto_fix_test,
+        "build_targets": cfg.build.targets,
         "driver_module_paths": resolve_driver_module_paths(cfg, root),
         "peripherals_enabled": [
             {
@@ -78,6 +81,7 @@ def _task_payload(cfg: EldaConfig, root: Path, extra: dict | None = None) -> dic
                 "name": p.name,
                 "bus": p.bus,
                 "framework": p.driver_framework,
+                "driver_framework": p.driver_framework,
                 "driver_module_path": p.driver_module_path,
             }
             for p in cfg.enabled_peripherals()

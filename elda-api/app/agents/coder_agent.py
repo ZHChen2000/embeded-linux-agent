@@ -16,22 +16,30 @@ class CoderAgent(BaseAgent):
         self.bind(payload)
         if phase not in self.PHASES:
             raise ValueError(f"Unknown generate phase: {phase}")
+        spec = payload.get("peripheral_spec") or {}
         peripheral = payload.get("current_peripheral", payload.get("target", "device"))
+        bus = spec.get("bus", "spi")
+        framework = spec.get("framework", spec.get("driver_framework", "auto"))
         hw = payload.get("hardware_context", "")
         rag = await rag_service.search_all(
-            f"Linux IIO SPI driver {peripheral} device tree binding",
+            f"Linux {framework} {bus} driver {peripheral} device tree binding",
             payload,
             top_k=8,
         )
+        driver_hint = (
+            f"Generate ONLY in-tree C driver for bus={bus}, framework={framework}. "
+            "Use IIO for ADC/IMU sensors, hwmon for environmental sensors, input for touch, "
+            "misc/platform/char for QSPI or custom IP, i2c/spi core helpers when needed. "
+            "Include of_device_id, devm_*, MODULE_* as appropriate."
+        )
+        dts_hint = (
+            "Generate ONLY device tree nodes for this peripheral. "
+            "If IRQ GPIO is in hardware context, set interrupt-parent, interrupts, and pinctrl. "
+            "I2C nodes must match reg address; SPI/QSPI nodes need reg or cs-gpios and bus frequency."
+        )
         instructions = {
-            "driver": (
-                "Generate ONLY the in-tree C driver source (.c) and header if needed. "
-                "IIO subsystem for sensors. Include of_device_id, devm_*, MODULE_* macros."
-            ),
-            "dts": (
-                "Generate ONLY device tree fragment/patch for this peripheral. "
-                "Match SoC pinctrl and bus from hardware context."
-            ),
+            "driver": driver_hint,
+            "dts": dts_hint,
             "kbuild": (
                 "Generate Kconfig fragment, Makefile fragment, and userspace test app (.c)."
             ),
@@ -40,7 +48,8 @@ class CoderAgent(BaseAgent):
             {
                 "role": "user",
                 "content": (
-                    f"Phase: {phase} for {peripheral}.\n{instructions[phase]}\n"
+                    f"Phase: {phase} for {peripheral} (bus={bus}, framework={framework}).\n"
+                    f"{instructions[phase]}\n"
                     'Output JSON PatchEnvelope: {"version":"1","patches":[{"id","unified_diff","rationale"}]}\n'
                     f"--- RAG ---\n{rag}\n--- HARDWARE ---\n{hw[:12000]}"
                 ),
