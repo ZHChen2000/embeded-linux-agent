@@ -44,19 +44,87 @@ class EldaApiClient:
             r.raise_for_status()
             return r.json()
 
+    def get_task_logs(self, task_id: str) -> list[str]:
+        with httpx.Client(timeout=self.timeout) as client:
+            r = client.get(self._url(f"/v1/tasks/{task_id}/logs"))
+            r.raise_for_status()
+            return r.json().get("logs", [])
+
+    @staticmethod
+    def _task_progress(task: dict[str, Any]) -> dict[str, Any] | None:
+        progress = task.get("progress")
+        if progress:
+            return progress
+        result = task.get("result")
+        if isinstance(result, dict):
+            p = result.get("progress")
+            if isinstance(p, dict):
+                return p
+        return None
+
+    @classmethod
+    def print_progress_update(
+        cls,
+        task: dict[str, Any],
+        *,
+        last_stage: str | None,
+        new_log_lines: list[str],
+    ) -> str | None:
+        from elda.task_progress import parse_stage_line
+
+        progress = cls._task_progress(task)
+        current_stage = None
+        if progress:
+            current_stage = progress.get("current_stage")
+            if current_stage and current_stage != last_stage:
+                label = progress.get("label") or task.get("message", "")
+                console.print(f"[bold cyan]{label}[/bold cyan]")
+                for step in progress.get("stages") or []:
+                    if step.get("status") == "running":
+                        console.print(f"  [yellow]▸[/yellow] {step.get('label', '')}")
+                    elif step.get("status") == "done":
+                        console.print(f"  [green]✓[/green] {step.get('label', '')}")
+        elif task.get("message") and task.get("message") != last_stage:
+            console.print(f"[dim]{task.get('status', '')} — {task.get('message', '')}[/dim]")
+            current_stage = task.get("message")
+
+        for line in new_log_lines:
+            if parse_stage_line(line)[0] is not None:
+                continue
+            text = line.strip()
+            if text:
+                console.print(f"[dim]  {text}[/dim]")
+        if progress:
+            return progress.get("current_stage") or last_stage
+        return current_stage if current_stage is not None else last_stage
+
     def wait_task(
         self,
         task_id: str,
         poll_interval: float = 2.0,
         timeout: float = 3600.0,
+        show_progress: bool = True,
     ) -> dict[str, Any]:
         deadline = time.time() + timeout
+        log_cursor = 0
+        last_stage: str | None = None
         while time.time() < deadline:
             task = self.get_task(task_id)
             status = task.get("status", "")
+            if show_progress:
+                logs = self.get_task_logs(task_id)
+                new_lines = logs[log_cursor:]
+                log_cursor = len(logs)
+                last_stage = self.print_progress_update(
+                    task, last_stage=last_stage, new_log_lines=new_lines
+                )
+            elif status not in ("done", "failed", "waiting_verify"):
+                console.print(f"[dim]Task {task_id}: {status} — {task.get('message', '')}[/dim]")
             if status in ("done", "failed", "waiting_verify"):
+                if show_progress and status in ("done", "failed"):
+                    label = "完成" if status == "done" else "失败"
+                    console.print(f"[bold]{label}[/bold] — {task.get('message', status)}")
                 return task
-            console.print(f"[dim]Task {task_id}: {status} — {task.get('message', '')}[/dim]")
             time.sleep(poll_interval)
         raise TimeoutError(f"Task {task_id} timed out after {timeout}s")
 

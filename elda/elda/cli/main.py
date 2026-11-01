@@ -32,6 +32,9 @@ app.add_typer(board_app, name="board")
 generate_app = typer.Typer(help="Code generation")
 app.add_typer(generate_app, name="generate")
 
+task_app = typer.Typer(help="Task status and logs")
+app.add_typer(task_app, name="task")
+
 WORKSPACE_FILES = (
     "register_map.json",
     "init_sequence.yaml",
@@ -423,6 +426,37 @@ def version() -> None:
     from elda import __version__
 
     console.print(f"elda {__version__}")
+
+
+@task_app.command("status")
+def task_status(
+    task_id: str = typer.Argument(..., help="Task UUID from elda submit output"),
+) -> None:
+    """Show task status and progress stages."""
+    cfg, _ = load_project_config()
+    task = _api(cfg).get_task(task_id)
+    console.print(f"[blue]{task_id}[/blue]  type={task.get('type')}  status={task.get('status')}")
+    if task.get("message"):
+        console.print(task["message"])
+    progress = task.get("progress") or (task.get("result") or {}).get("progress")
+    if progress:
+        console.print(f"\n[bold]当前阶段[/bold] {progress.get('label', '')}")
+        for step in progress.get("stages") or []:
+            mark = {"done": "[green]✓[/green]", "running": "[yellow]▸[/yellow]", "pending": "[dim]·[/dim]"}
+            m = mark.get(step.get("status", ""), "·")
+            console.print(f"  {m} {step.get('label', '')}")
+
+
+@task_app.command("logs")
+def task_logs_cmd(
+    task_id: str = typer.Argument(..., help="Task UUID"),
+    tail: int = typer.Option(40, "--tail", "-n", help="Show last N log lines"),
+) -> None:
+    """Fetch task log lines from elda-api."""
+    cfg, _ = load_project_config()
+    lines = _api(cfg).get_task_logs(task_id)
+    for line in lines[-tail:]:
+        console.print(line)
 
 
 if __name__ == "__main__":

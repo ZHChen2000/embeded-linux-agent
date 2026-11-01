@@ -135,12 +135,14 @@ async def get_task(task_id: str) -> dict[str, Any]:
     task = await task_store.get(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+    progress = (task.result or {}).get("progress")
     return {
         "id": task.id,
         "type": task.type,
         "project_id": task.project_id,
         "status": task.status,
         "message": task.message,
+        "progress": progress,
         "result": task.result,
     }
 

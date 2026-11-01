@@ -86,7 +86,37 @@ class TaskStore:
             if message:
                 task.message = message
             if result is not None:
-                task.result = result
+                prev = task.result or {}
+                merged = dict(result)
+                if "progress" not in merged and prev.get("progress"):
+                    merged["progress"] = prev["progress"]
+                task.result = merged
+            task.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+
+    async def update_progress(
+        self,
+        task_id: str,
+        stage: str,
+        label: str,
+        *,
+        task_type: str,
+    ) -> None:
+        from elda.task_progress import compute_progress
+
+        async with SessionLocal() as session:
+            task = await session.get(Task, task_id)
+            if not task:
+                return
+            prev = task.result or {}
+            progress = compute_progress(
+                task_type,
+                stage,
+                label,
+                prev.get("progress"),
+            )
+            task.message = label
+            task.result = {**prev, "progress": progress}
             task.updated_at = datetime.now(timezone.utc)
             await session.commit()
 

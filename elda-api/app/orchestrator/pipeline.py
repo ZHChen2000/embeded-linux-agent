@@ -19,6 +19,7 @@ from app.logging_setup import bind_context
 from app.storage.minio_store import upload_bytes, upload_file
 from app.storage.redis_queue import publish_task_log
 from app.store import TaskRecord, task_store
+from app.task_progress import format_stage_log, set_task_stage
 from app.validation.schemas import infer_module_paths_from_patches
 
 logger = logging.getLogger(__name__)
@@ -41,12 +42,17 @@ class PipelineOrchestrator:
         logger.info(msg)
         await publish_task_log(task_id, msg)
 
+    async def _stage(self, task: TaskRecord, stage: str, label: str) -> None:
+        await self._log(task.id, format_stage_log(stage, label))
+        await set_task_stage(task.id, task.type, stage, label)
+
     async def run_task(self, task_id: str) -> None:
         task = await task_store.get(task_id)
         if not task:
             return
         bind_context(task_id=task_id)
         await task_store.set_status(task_id, "running")
+        await self._stage(task, "start", f"开始执行：{task.type}")
         try:
             handlers = {
                 "ingest": self._run_ingest,
@@ -81,14 +87,16 @@ class PipelineOrchestrator:
 
         soc_pdf = payload.get("soc_datasheet")
         if soc_pdf:
-            await self._log(task.id, f"PDF extract SOC: {soc_pdf}")
+            await self._stage(task, "pdf_extract_soc", f"解析 SoC 数据手册：{soc_pdf}")
             soc_mineru = await self.executor.tool_call(
                 task.id, "pdf.mineru_extract", {"pdf_path": soc_pdf}, wait=True
             )
+            await self._stage(task, "extract_soc", "抽取 SoC 硬件信息")
             soc_drafts = await self.extractor.extract({**payload, **soc_mineru}, doc_type="soc")
             await self.executor.write_workspace_files(root, soc_drafts, subdir="soc")
             if soc_mineru.get("markdown"):
                 try:
+                    await self._stage(task, "index_soc", "写入 SoC 向量索引")
                     await rag_service_index(task, soc_pdf, soc_mineru["markdown"], payload)
                 except Exception as exc:
                     await self._log(task.id, f"Milvus index skipped (SOC): {exc}")
@@ -106,15 +114,17 @@ class PipelineOrchestrator:
         for item in peripherals:
             pid = item.get("id", "default")
             pdf_path = item["path"]
-            await self._log(task.id, f"PDF extract peripheral {pid}: {pdf_path}")
+            await self._stage(task, f"pdf_extract_{pid}", f"解析外设 PDF（{pid}）")
             mineru = await self.executor.tool_call(
                 task.id, "pdf.mineru_extract", {"pdf_path": pdf_path}, wait=True
             )
+            await self._stage(task, f"extract_{pid}", f"抽取外设硬件信息（{pid}）")
             pp = {**payload, **mineru}
             drafts = await self.extractor.extract(pp, doc_type="peripheral")
             await self.executor.write_workspace_files(root, drafts, subdir=f"peripherals/{pid}")
             if mineru.get("markdown"):
                 try:
+                    await self._stage(task, f"index_{pid}", f"写入向量索引（{pid}）")
                     n = await rag_service_index(task, pdf_path, mineru["markdown"], payload)
                     await self._log(task.id, f"Indexed {n} chunks for {pid}")
                 except Exception as exc:
@@ -123,6 +133,11 @@ class PipelineOrchestrator:
                 if p.is_file():
                     upload_bytes(f"{task.project_id}/datasheets/{pid}/{p.name}", p.read_bytes())
 
+        await self._stage(
+            task,
+            "wait_verify",
+            "等待人工审核 workspace，完成后执行：elda verify workspace",
+        )
         await task_store.set_status(
             task.id,
             "waiting_verify",
@@ -130,6 +145,7 @@ class PipelineOrchestrator:
         )
 
     async def _run_board_validate(self, task: TaskRecord) -> None:
+        await self._stage(task, "board_check", "板级资源冲突检查")
         result = await self.executor.tool_call(task.id, "board.conflict_check", {}, wait=True)
         if result.get("has_hard_errors"):
             raise RuntimeError("Board has hard conflicts — fix elda.yaml (duplicate CS/I2C address)")
@@ -152,9 +168,15 @@ class PipelineOrchestrator:
 
     async def _run_plan(self, task: TaskRecord) -> None:
         payload = dict(task.payload)
+        await self._stage(task, "load_context", "加载 workspace 硬件描述")
         payload["hardware_context"] = await self._load_hardware_context(payload.get("project_root", "."))
         plans = []
         for p in self._enabled_peripherals(payload):
+            await self._stage(
+                task,
+                "plan_agent",
+                f"规划驱动方案：{p.get('name', 'device')}",
+            )
             pp = {
                 **payload,
                 "target": p.get("name", "device"),
@@ -167,6 +189,7 @@ class PipelineOrchestrator:
         root = Path(payload.get("project_root", "."))
         plan_path = root / "reports" / "driver_plan.md"
         plan_path.parent.mkdir(parents=True, exist_ok=True)
+        await self._stage(task, "write_report", "写入 reports/driver_plan.md")
         plan_path.write_text(json.dumps(plans, indent=2, ensure_ascii=False), encoding="utf-8")
         await task_store.set_status(task.id, "done", message="Plan generated", result={"plans": plans})
 
@@ -184,6 +207,7 @@ class PipelineOrchestrator:
 
     async def _run_generate_phases(self, task: TaskRecord, phases: tuple[str, ...]) -> None:
         payload = dict(task.payload)
+        await self._stage(task, "load_context", "加载 workspace 硬件描述")
         payload["hardware_context"] = await self._load_hardware_context(payload.get("project_root", "."))
         root = Path(payload.get("project_root", "."))
         all_patches: list[dict[str, str]] = []
@@ -196,6 +220,11 @@ class PipelineOrchestrator:
                 "framework": p.get("framework", p.get("driver_framework", "auto")),
             }
             for phase in phases:
+                await self._stage(
+                    task,
+                    f"generate_{phase}",
+                    f"生成 {p.get('name', 'device')} / {phase}",
+                )
                 patches = await self.coder.generate_phase(pp, phase)
                 for patch in patches:
                     await self.executor.tool_call(
@@ -215,7 +244,9 @@ class PipelineOrchestrator:
         if not manifest["module_paths"]:
             manifest["module_paths"] = payload.get("driver_module_paths", ["drivers/iio"])
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        await self._stage(task, "apply_patches", f"已应用 {len(all_patches)} 个补丁，写入 manifest")
         if "dts" in phases and payload.get("board_dts"):
+            await self._stage(task, "dts_validate", "校验设备树（dtc）")
             dts_res = await self.executor.tool_call(
                 task.id,
                 "dts.validate",
@@ -240,6 +271,11 @@ class PipelineOrchestrator:
         module_paths = _resolve_module_paths(root, payload)
 
         for round_i in range(max_rounds + 1):
+            await self._stage(
+                task,
+                f"build_round_{round_i}",
+                f"编译第 {round_i + 1} 轮：模块与 DTS",
+            )
             logs: list[str] = []
             all_ok = True
             if "module" in targets:
@@ -270,6 +306,7 @@ class PipelineOrchestrator:
             compile_ok = all_ok and parsed.get("error_count", 0) == 0
             if compile_ok:
                 if "zimage" in targets:
+                    await self._stage(task, "zimage", "构建内核 zImage")
                     zimg = await self.executor.tool_call(
                         task.id, "build.make_zimage", {}, wait=True
                     )
@@ -290,6 +327,11 @@ class PipelineOrchestrator:
                     return
             if not fix_enabled or round_i >= max_rounds:
                 break
+            await self._stage(
+                task,
+                f"build_round_{round_i}_fix",
+                f"编译失败，自动修复第 {round_i + 1} 轮",
+            )
             patch = await self.fixer.fix(payload, full_log, round_i + 1)
             await self.executor.tool_call(
                 task.id,
@@ -305,14 +347,17 @@ class PipelineOrchestrator:
     async def _run_deploy(self, task: TaskRecord) -> None:
         payload = dict(task.payload)
         root = Path(payload.get("project_root", "."))
+        await self._stage(task, "tftp", "拷贝 zImage/dtb 到 TFTP 目录")
         await self.executor.tool_call(task.id, "deploy.tftp_copy", {}, wait=True)
         module_paths = _resolve_module_paths(root, payload)
+        await self._stage(task, "nfs", "同步驱动模块到 NFS")
         nfs_res = await self.executor.tool_call(
             task.id,
             "deploy.nfs_modules",
             {"module_paths": module_paths},
             wait=True,
         )
+        await self._stage(task, "checklist", "生成上板检查清单")
         checklist = await self.executor.tool_call(task.id, "deploy.manual_checklist", {}, wait=True)
         await task_store.set_status(
             task.id,
@@ -327,6 +372,7 @@ class PipelineOrchestrator:
         dmesg = payload.get("log_content", "")
         app_out = payload.get("app_output", "")
         if not dmesg and payload.get("capture_serial", True):
+            await self._stage(task, "capture", "从串口采集运行日志")
             cap = await self.executor.tool_call(task.id, "serial.capture", {}, wait=True)
             extracted = await self.executor.tool_call(
                 task.id,
@@ -345,6 +391,7 @@ class PipelineOrchestrator:
         auto_fix = payload.get("auto_fix_test", True)
         result: dict[str, Any] = {}
         for round_i in range(max_test_rounds + 1):
+            await self._stage(task, "analyze", f"分析测试结果（第 {round_i + 1} 轮）")
             result = await self.diagnostician.analyze(payload, dmesg, app_out, reg_map)
             ok = (
                 result.get("probe_ok")
@@ -360,6 +407,11 @@ class PipelineOrchestrator:
                 return
             if not auto_fix or round_i >= max_test_rounds:
                 break
+            await self._stage(
+                task,
+                f"test_round_{round_i}_fix",
+                f"测试未通过，自动修复并重编（第 {round_i + 1} 轮）",
+            )
             patch = await self.fixer.fix_test(payload, result, round_i + 1)
             await self.executor.tool_call(
                 task.id,
@@ -385,6 +437,7 @@ class PipelineOrchestrator:
     async def _run_report(self, task: TaskRecord) -> None:
         payload = dict(task.payload)
         root = Path(payload.get("project_root", "."))
+        await self._stage(task, "gather", "汇总工程产物与测试结果")
         artifacts = {
             "project": task.project_id,
             "hardware": await self._load_hardware_context(str(root)),
@@ -393,12 +446,14 @@ class PipelineOrchestrator:
             "manifest": _read_json(root / "reports" / "driver_manifest.json"),
         }
         payload["hardware_context"] = artifacts["hardware"]
+        await self._stage(task, "write", "生成最终报告")
         gen = await self.reporter.generate(payload, artifacts)
         paths = write_reports(str(root), gen["markdown"])
         upload_file(f"{task.project_id}/reports/final_report.md", Path(paths["markdown"]))
         await task_store.set_status(task.id, "done", message="Report written", result=paths)
 
     async def _run_index_kernel(self, task: TaskRecord) -> None:
+        await self._stage(task, "index", "索引内核源码到 Milvus")
         result = await self.executor.tool_call(
             task.id, "milvus.index_kernel", {"paths": task.payload.get("paths")}, wait=True
         )
@@ -408,6 +463,7 @@ class PipelineOrchestrator:
         source = task.payload.get("source_path")
         if not source:
             raise ValueError("source_path required")
+        await self._stage(task, "index", f"索引厂商驱动：{source}")
         result = await self.executor.tool_call(
             task.id, "milvus.index_vendor", {"source_path": source}, wait=True
         )
